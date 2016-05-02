@@ -1,0 +1,2 @@
+clang++ -framework OpenGL -framework glut main.cpp --std=c++11 -Wno-deprecated -w -o hazi
+
