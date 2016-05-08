@@ -91,7 +91,7 @@ void checkLinking(unsigned int program) {
 
 // vertex shader in GLSL
 const char *vertexSource = R"(
-#version 140
+#version 130
 precision highp float;
 
 in vec2 vertexPosition;		// variable input from Attrib Array selected by glBindAttribLocation
@@ -105,7 +105,7 @@ void main() {
 
 // fragment shader in GLSL
 const char *fragmentSource = R"(
-#version 140
+#version 130
 precision highp float;
 
 uniform sampler2D textureUnit;
@@ -214,6 +214,8 @@ struct vec4 {
     }
     float Length() const { return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
     }
+    
+    //http://mathworld.wolfram.com/images/equations/RodriguesRotationFormula/Inline13.gif//
     vec4 RodriguesRotation(vec4 unitvector, float theta){
         float x = unitvector.v[0];
         float y = unitvector.v[1];
@@ -278,6 +280,11 @@ struct Material{
         if (ks.v[0] == 0 && ks.v[1] == 0 && ks.v[2] == 0){
             return IncomingLightRadiance * kd * cosTheta;
         }
+        
+
+        if (cosTheta>0.98)  {      //határszög cosinusa
+            return vec4(1,1,1,1)*100;
+        }
         vec4 normalref = IncomingLightRadiance * kd * cosTheta;
         vec4 halfwayVector = (incomingRayDirection + normal).normalize();
         float cosDelta = normal.dot(halfwayVector);
@@ -292,16 +299,16 @@ struct Material{
         return retval;
     }
     vec4 refract(vec4 incomingRayDirection, vec4 normal) {
-        float ior = n_toresmutato;
+        float ior = n.v[0];
         float cosa = (normal.dot(incomingRayDirection))*-1.0;
-        if (cosa < 0) { cosa = -cosa; normal = normal*-1; ior = 1/n_toresmutato; }
+        if (cosa < 0) { cosa = -cosa; normal = normal*-1.0; ior = 1/n_toresmutato; }
         float disc = 1 - (1 - cosa * cosa)/ior/ior;
         if (disc < 0) return reflect(incomingRayDirection, normal);
-        return incomingRayDirection/ior + normal * (cosa/ior - sqrt(disc));
+        return incomingRayDirection/ior + normal * (cosa/ior - sqrtf(disc));
     }
     vec4 Fresnel(vec4 normal, vec4 incomingRayDirection){
         float cosa = fabs(normal.dot(incomingRayDirection));
-        vec4 retval = F0 + (vec4(1, 1, 1, 1) - F0) * pow(cosa,5);
+        vec4 retval = F0 + (vec4(1, 1, 1, 1) - F0) * powf(cosa,5);
         return retval;
     }
 };
@@ -325,7 +332,7 @@ struct Intersectable{
         material = m;
     }
     virtual Hit intersect(const Ray& ray)=0;
-    virtual vec4 getNormal(const vec4& intersect) = 0; // a felületi normálist adott pontban lekérdező függvény
+    virtual vec4 getNormal(const vec4& intersect) = 0;
 };
 
 
@@ -364,11 +371,15 @@ public:
         return retval;
     }
     vec4 getNormal(const vec4& intersect){
-        //derivativex = 2 * (intersect.v[0] - central.v[0]);
-        //derivativey = 2 * (intersect.v[1] - central.v[1]);
-        //derivativez = 2 * (intersect.v[2] - central.v[2]);
         vec4 retval = (intersect - center) * 2;
         return retval.normalize();
+    }
+    void Translate(float x, float y, float z){
+        mat4 M(	1,0,0,1,
+               0,1,0,1,
+               0,0,1,1,
+               x,y,z,1);
+        center = center*M;
     }
 };
 
@@ -428,15 +439,27 @@ public:
     };
 };
 
-//fű
 
 class Plane : public Intersectable {
     
 public:
     vec4 r1, normal;
+    Plane(){
+        this -> r1 = vec4();
+        this -> normal = vec4(0,1,0).normalize();
+    }
     Plane(vec4 r1, vec4 normal){
         this -> r1 = r1;
         this -> normal = normal.normalize();
+    }
+    Plane(const Plane& otherplane){
+        *this = otherplane;
+    }
+    Plane& operator=(const Plane& otherplane){
+        this -> r1 = otherplane.r1;
+        this -> normal = otherplane.normal;
+        this -> addMaterial(otherplane.material);
+        return *this;
     }
     Hit intersect(const Ray& ray){
         Hit retval;
@@ -462,6 +485,8 @@ public:
     PlaneWithHole(vec4 r1, vec4 normal, vec4 min, vec4 max){
         this -> r1 = r1;
         this -> normal = normal.normalize();
+        this -> min = min;
+        this -> max = max;
     }
     Hit intersect(const Ray& ray){
         Hit retval;
@@ -484,9 +509,48 @@ public:
     }
 };
 
-
-//ezt majd kibuggolom, szerintem valamelyik oldalon nem clockwise adtam meg
-//mert clockwise de eszrevettem hogy az nem lesz jo ezert kiolvastam oket visszafele a tombbol... savage
+class TriangleMiracle : public Intersectable{
+    std::vector<Triangle*> triangles;
+public:
+    void add(vec4 p1, vec4 p2, vec4 p3, Material* material){
+        Triangle* t = new Triangle(p1, p2, p3);
+        t->addMaterial(material);
+        triangles.push_back(t);
+    }
+    void add(const Triangle& t){
+        Triangle* tnew = new Triangle(t);
+        triangles.push_back(tnew);
+    }
+    void addMaterial(Material* m){
+        for(Triangle* t : triangles){
+            t->addMaterial(m);
+        }
+    }
+    Hit intersect(const Ray& ray){
+        Hit bestHit;
+        for(Triangle* obj : triangles) {
+            Hit hit = obj->intersect(ray); //  hit.t < 0 if no intersection
+            if(hit.t > 0 && (bestHit.t < 0 || hit.t < bestHit.t)) 	bestHit = hit;
+        }
+        return bestHit;
+    }
+    
+    vec4 getNormal(const vec4& intersect){
+        vec4 retval(0,0,0,0);
+        return retval;
+    }
+    void Translate(float x, float y, float z){
+        for(Triangle* obj : triangles){
+            obj->Translate(x,y,z);
+        }
+    }
+    
+    ~TriangleMiracle(){
+        for(Triangle* t : triangles){
+            delete t;
+        }
+    }
+};
 
 class Cube : public Intersectable{
     float size;
@@ -582,6 +646,10 @@ public:
     }
 };
 
+
+
+//http://www.ogre3d.org/forums/viewtopic.php?f=2&t=26442
+
 class Ellipsoid : public Intersectable {
     float a, b, c;
     vec4 center;
@@ -615,8 +683,8 @@ public:
         if(d < 0)	//prevent getting rekt
             retval.t = -1.0;
         else{
-            float t1 = (-1.0 * b_ - sqrt(b_ * b_ - 4 * a_ * c_)) / 2.0 * a_;
-            float t2 = (-1.0 * b_ + sqrt(b_ * b_ - 4 * a_ * c_)) / 2.0 * a_;
+            float t1 = (-1.0 * b_ - sqrtf(b_ * b_ - 4 * a_ * c_)) / 2.0 * a_;
+            float t2 = (-1.0 * b_ + sqrtf(b_ * b_ - 4 * a_ * c_)) / 2.0 * a_;
             if (t1<t2)
                 retval.t = t1;
             else
@@ -628,9 +696,9 @@ public:
         return retval;
     }
     vec4 getNormal(const vec4& intersect){
-        float derivativex = 2.0 * (intersect.v[0] - center.v[0])/a;
-        float derivativey = 2.0 * (intersect.v[1] - center.v[1])/b;
-        float derivativez = 2.0 * (intersect.v[2] - center.v[2])/c;
+        float derivativex = 2.0 * (intersect.v[0] - center.v[0])/(a*a);
+        float derivativey = 2.0 * (intersect.v[1] - center.v[1])/(b*b);
+        float derivativez = 2.0 * (intersect.v[2] - center.v[2])/(c*c);
         vec4 ret = vec4(derivativex, derivativey, derivativez).normalize();
         return ret;
     }
@@ -676,20 +744,46 @@ public:
                           (l->dir*-1).normalize());
             Hit shadowHit = firstIntersect(shadowRay);
             if(shadowHit.t < 0 || shadowHit.t > 10000)
-                outRadiance += hit.material->shade(hit.normal, (ray.dv).normalize(), (l->dir*-1).normalize(), l->Lout);
+                outRadiance += hit.material->shade(hit.normal, (ray.dv*-1).normalize(), (l->dir*-1).normalize(), l->Lout);
         }
         if(hit.material->isReflective){
             vec4 reflectionDir = (hit.material->reflect(ray.dv, hit.normal)).normalize();
             Ray reflectedRay(hit.position + hit.normal*hibatures*sign(hit.normal.dot((ray.dv*-1).normalize())), reflectionDir);
-            outRadiance += Trace(reflectedRay, depth+1) * hit.material->Fresnel((ray.dv*-1).normalize(), hit.normal);
+            outRadiance += Trace(reflectedRay, depth+1) * hit.material->Fresnel((ray.dv).normalize(), hit.normal);
         }
         if(hit.material->isRefractive) {
             vec4 refractionDir = (hit.material->refract(ray.dv,hit.normal)).normalize();
             Ray refractedRay(hit.position - hit.normal*hibatures*sign(hit.normal.dot((ray.dv*(-1)).normalize())), refractionDir);
-            outRadiance += Trace(refractedRay,depth+1)*(vec4(1,1,1,0)-hit.material->Fresnel((ray.dv*-1).normalize(), hit.normal));
+            outRadiance += Trace(refractedRay,depth+1)*(vec4(1,1,1,0)-hit.material->Fresnel((ray.dv).normalize(), hit.normal));
         }
         return outRadiance;
     }
+};
+
+
+class WaterofLife : public Intersectable{
+    Plane upside;
+    Plane downside;
+public:
+    WaterofLife(const Plane& up, const Plane& down){
+        upside = up;
+        downside = down;
+    }
+    
+    Hit intersect(const Ray& ray){
+        Hit upsidehit = upside.intersect(ray);
+        Hit downsidehit = downside.intersect(ray);
+        vec4 uphitpoint = upsidehit.position + ray.dv * upsidehit.t;
+        vec4 downhitpoint =  downsidehit.position + ray.dv * downsidehit.t;
+        
+        Hit retval;
+        return retval;
+    }
+    
+    vec4 getNormal(const vec4& intersect){
+        return vec4();
+    }
+    
 };
 
 struct MyCamera600x600{
@@ -736,7 +830,6 @@ struct MyCamera600x600{
     }
     Ray GetRay(int x, int y){
         vec4 p = centerOfPlanePosition + rightUnitVector * ((2*float(x)/XM)-1) + upUnitVector * ((2*float(y)/YM)-1);
-        //p.print();
         Ray retval(eyePosition, (p-eyePosition).normalize());
         return retval;
     }
@@ -814,59 +907,178 @@ void onInitialization() {
     
     //a red material for the unit sphere
     Material spherematerialRed(vec4(0,0,0),vec4(0,0,0),
-                            vec4(0.8, 0, 0),vec4(0.8, 0.5, 0.5),vec4(0.5, 0.5, 0.5),1.8974f);
+                            vec4(0.8, 0, 0),vec4(0.7, 0.1, 0.1),vec4(1,1,1),10);
     
     //my materials
-    Material goldMaterial(vec4(0.17,0.35,1.5), vec4(3.1,2.7,1.9), vec4(), vec4(), vec4(), 10);
+    Material goldMaterial(vec4(0.17,0.35,1.5), vec4(3.1,2.7,1.9), vec4(), vec4(), vec4(), 0);
     goldMaterial.setReflective();
     Material grassMaterial(vec4(), vec4(), vec4(0.2, 0.3, 0.2), vec4(0.1, 0.5, 0.2),vec4(), 0);
-   
     
-    Material cubematerial(vec4(0,0,0),vec4(0,0,0),
-                            vec4(0.2, 0.2, 0.8),vec4(0.8, 0.5, 0.5),vec4(1, 1, 1),500.8974f);
+    Material water (vec4(1.3, 1.3, 1,3), vec4(), vec4(), vec4(), vec4(.1,.1,.1), 100);
+    water.setRefractive();
+    water.setReflective();
+    
+    //http://www.it.hiof.no/~borres/j3d/explain/light/p-materials.html
+    Material brassMaterial(vec4(),
+                           vec4(),
+                           vec4(0.329412f, 0.223529f, 0.027451f), vec4(0.780392f, 0.568627f, 0.113725f),vec4(0.992157f, 0.941176f, 0.807843f), 27.8974);
+    Material perl(vec4(),vec4(),vec4(0.25f, 0.20725f, 0.20725f, 0.922f),vec4(1.0f, 0.829f, 0.829f, 0.922f ),vec4(0.296648f, 0.296648f, 0.296648f, 0.922f),1000.264f);
+    
+    
+    
+    
+    
     Material silverMaterial(vec4(0.14,0.16,0.13),vec4(4.1,2.3,3.1),vec4(), vec4(), vec4(), 10);
     silverMaterial.setReflective();
-    /*
-     n/k az r,g,b hullámhosszain: 0.17/3.1, 0.35/2.7, 1.5/1.9), felületének implicit egyenlete nem lineáris (pl. kvadratikus), a másik ezüstözött (n/k az r,g,b hullámhosszain: 0.14/4.1, 0.16/2.3, 0.13/3.1) poligonháló.
-     */
+    Material poolMaterial(vec4(), vec4(), vec4(0.1,0.1,0.5), vec4(0.1, 0.1, 0.9), vec4(1, 1, 1), 5);
     
     
     vec4 SunDirection(-0.212527, -0.898794, -0.383408);
     Light Sun(vec4(1,1,1), SunDirection);
     scene.addLight(&Sun);
+    TriangleMiracle pool;
     
-    MyCamera600x600 mycam(vec4(0,0,10), vec4(0,-0.9,8));
-    //MyCamera600x600 mycam(MyCamera600x600(vec4(0,0,10), vec4(0,-3,0), 50));
-    Sphere unitSphere(vec4(0,0,0),1);             //az egyseggömb, ami a 0,0,0 ban helyezkedik el
-    unitSphere.addMaterial(&spherematerialRed);
-    Sphere mysphere(vec4(-3,-3,0),0.5);
-    mysphere.addMaterial(&silverMaterial);
-    Ellipsoid myellipsoid(vec4(0,-2,0),0.7,1,1);
+    Triangle deszka1(vec4(-0.8,-4,-9),vec4(-0.8,-4,-5),vec4(0.8,-4,-5));
+    Triangle deszka2(vec4(-0.8,-4,-9),vec4(0.8,-4,-5),vec4(0.8,-4,-9));
+    Triangle deszka3(vec4(-0.8,-3.8,-9),vec4(-0.8,-3.8,-5),vec4(0.8,-3.8,-5));
+    Triangle deszka4(vec4(-0.8,-3.8,-9),vec4(0.8,-3.8,-5),vec4(0.8,-3.8,-9));
+    
+    
+    Triangle deszka5(vec4(-0.8,-3.8,-5),vec4(-0.8,-4,-4),vec4(0.8,-4,-4));
+    Triangle deszka6(vec4(0.8,-4,-4),vec4(0.8,-3.8,-5),vec4(-0.8,-3.8,-5));
+    
+    TriangleMiracle ugrodeszka;
+    ugrodeszka.add(deszka1);
+    ugrodeszka.add(deszka2);
+    ugrodeszka.add(deszka3);
+    ugrodeszka.add(deszka4);
+    ugrodeszka.add(deszka5);
+    ugrodeszka.add(deszka6);
+    ugrodeszka.addMaterial(&brassMaterial);
+    ugrodeszka.Translate(0,0,1.8);
+    
+    scene.addObject(&ugrodeszka);
+    
+    Sphere spheres[] = {
+        
+    Sphere(vec4(-6, -3.5, -25),0.5),
+    Sphere(vec4(-6, -3.5, -26),0.5),
+    Sphere(vec4(-6, -3.5, -27),0.5),
+    Sphere(vec4(-6, -3.5, -28),0.5),
+        Sphere(vec4(-7, -3.5, -28),0.5),
+        Sphere(vec4(-8, -3.5, -28),0.5),
+        Sphere(vec4(-9, -3.5, -28),0.5),
+        
+        Sphere(vec4(-9, -3.5, -27),0.5),
+        Sphere(vec4(-9, -3.5, -26),0.5),
+        Sphere(vec4(-9, -3.5, -25),0.5),
+        
+        Sphere(vec4(-8, -3.5, -25),0.5),
+        Sphere(vec4(-7, -3.5, -25),0.5),
+        Sphere(vec4(-6, -3.5, -25),0.5),
+        Sphere(vec4(-6, -3.5, -25),0.5),
+    
+        
+        Sphere(vec4(-6.5, -3, -25.5),0.5),
+        Sphere(vec4(-6.5, -3, -26.5),0.5),
+        Sphere(vec4(-6.5, -3, -27.5),0.5),
+        
+        Sphere(vec4(-7.5, -3, -25.5),0.5),
+        Sphere(vec4(-7.5, -3, -27.5),0.5),
+        Sphere(vec4(-8.5, -3, -27.5),0.5),
+        Sphere(vec4(-8.5, -3, -25.5),0.5),
+        Sphere(vec4(-8.5, -3, -26.5),0.5),
+
+        Sphere(vec4(-7, -2.5, -26),0.5),
+        Sphere(vec4(-8, -2.5, -26),0.5),
+        Sphere(vec4(-8, -2.5, -27),0.5),
+        Sphere(vec4(-7, -2.5, -27),0.5),
+        
+        Sphere(vec4(-7.5,-2,-26.5),0.5)
+
+        
+
+    };
+    for (int i=0; i<27; i++){
+        if (i%2==0)
+        spheres[i].addMaterial(&brassMaterial);
+        else
+             spheres[i].addMaterial(&perl);
+        spheres[i].Translate(0.5, 0, 15);
+        scene.addObject(&spheres[i]);
+    }
+    
+    
+    
+    
+    Sphere dekor1(vec4(-5,-3.5, -55),0.5);
+    Sphere dekor2(vec4(5,-3.5, -55),0.5);
+    Sphere dekor3(vec4(-5,-3.5, -5),0.5);
+    Sphere dekor4(vec4(5,-3.5, -5),0.5);
+    dekor1.addMaterial(&spherematerialRed);
+    dekor2.addMaterial(&spherematerialRed);
+    dekor3.addMaterial(&spherematerialRed);
+    dekor4.addMaterial(&spherematerialRed);
+    
+    scene.addObject(&dekor1);
+    scene.addObject(&dekor2);
+    scene.addObject(&dekor3);
+    scene.addObject(&dekor4);
+    
+    Triangle leftSideofPoolNearer(vec4(-5,-7,-5),vec4(-5,-7,-55),vec4(-5,-4,-5));
+    Triangle leftSideofPoolFarer(vec4(-5,-7,-55),vec4(-5,-4,-55),vec4(-5,-4,-5));
+    Triangle centerSideFarUpper(vec4(5,-4,-55), vec4(-5,-4,-55), vec4(5,-7,-55));
+    Triangle centerSideFarDowner(vec4(5,-7,-55), vec4(-5,-4,-55),vec4(-5,-7,-55));
+    Triangle rightSideofPoolNearer(vec4(5,-7,-55),vec4(5,-7,-5),vec4(5,-4,-5));
+    Triangle rightSideofPoolFarer(vec4(5,-7,-55),vec4(5,-4,-5),vec4(5,-4,-55));
+    Triangle bottomofPoolNearer( vec4(5,-7,-55), vec4(-5,-7,-5),vec4(5, -7, -5));
+    Triangle bottomofPoolFarer( vec4(-5,-7,-55), vec4(-5,-7,-5), vec4(5,-7,-55));
+    
+    
+    pool.add(leftSideofPoolFarer);
+    pool.add(leftSideofPoolNearer);
+    pool.add(centerSideFarDowner);
+    pool.add(centerSideFarUpper);
+    pool.add(rightSideofPoolNearer);
+    pool.add(rightSideofPoolFarer);
+    pool.add(bottomofPoolNearer);
+    pool.add(bottomofPoolFarer);
+    
+    
+    pool.addMaterial(&poolMaterial);
+    scene.addObject(&pool);
+    
+    Plane teteje(vec4(0,-5,5), vec4(0,1,0));
+    Plane alja(vec4(0,-7,5), vec4(0,1,0));
+    teteje.addMaterial(&water);
+    alja.addMaterial(&water);
+ 
+    //NOT A USELESS COMMENT! Use this for a frontal view
+    //MyCamera600x600 mycam(MyCamera600x600(vec4(0,1,7), vec4(0,-3,-10), 50));
+    MyCamera600x600 mycam(MyCamera600x600(vec4(4,1,7), vec4(0,-3,-10), 50));
+    Ellipsoid myellipsoid(vec4(0,-3.2,-11.5),1,4,1);
     myellipsoid.addMaterial(&goldMaterial);
-    Plane myplane(vec4(0,-4.5,0), vec4(0,1,0));
-    myplane.addMaterial(&grassMaterial);
-    PlaneWithHole myplanewithhole(vec4(0,-4.5,0), vec4(0,1,0),vec4(-4,-4.5,-10),vec4(4,-4.5,0));
+    Plane mywater(vec4(0,-5,5), vec4(0,1,0));
+    PlaneWithHole myplanewithhole(vec4(0,-4,0), vec4(0,1,0),vec4(-5,-4,-55),vec4(5,-4,-5));
     myplanewithhole.addMaterial(&grassMaterial);
-    Sphere s(vec4(-2,-1,0), 1);
-    s.addMaterial(&goldMaterial);
-    Cube mycube(0.5, vec4(-2,-3,0));
-    mycube.addMaterial(&spherematerialRed);
-    //mycube.Rotate(vec4(0,0,0), 10);
-    mycam.Rotate(vec4(1,0,0), 0);//  ezt használhatod forgatásra, bár most az egész tengelyt forgatja
-    //mycam.Translate(<#float x#>, <#float y#>, <#float z#>) //"transzlál"
-    scene.addObject(&unitSphere);
-    //scene.addObject(&mysphere);
-    //scene.addObject(&myplane);
+    Cube mycube(2, vec4(0,-5,-30));
+    mycube.addMaterial(&silverMaterial);
     scene.addObject(&myplanewithhole);
     scene.addObject(&mycube);
-    scene.addObject(&s);
-    //scene.addObject(&myellipsoid);
+    scene.addObject(&myellipsoid);
+    mywater.addMaterial(&water);
+    scene.addObject(&mywater);
+
     
     static vec4 background[windowWidth * windowHeight];
     for (int x = 0; x < windowWidth; x++) {
         for (int y = 0; y < windowHeight; y++) {
             Ray newray = mycam.GetRay(x,y);
             background[y * windowWidth + x] = scene.Trace(newray,4);
+            if (background[y * windowWidth + x].v[0]>1.5 && background[y * windowWidth + x].v[1]>1.5 && background[y * windowWidth + x].v[2]>1.5)
+            {
+                //printf("x position : %d  y position: %d \n" ,x, y);
+            }
         }
     }
     
