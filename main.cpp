@@ -91,7 +91,7 @@ void checkLinking(unsigned int program) {
 
 // vertex shader in GLSL
 const char *vertexSource = R"(
-#version 130
+#version 140
 precision highp float;
 
 in vec2 vertexPosition;		// variable input from Attrib Array selected by glBindAttribLocation
@@ -105,7 +105,7 @@ void main() {
 
 // fragment shader in GLSL
 const char *fragmentSource = R"(
-#version 130
+#version 140
 precision highp float;
 
 uniform sampler2D textureUnit;
