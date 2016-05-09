@@ -18,8 +18,8 @@
 //
 // NYILATKOZAT
 // ---------------------------------------------------------------------------------------------
-// Nev    : Arnócz László
-// Neptun : PV8AK9
+// Nev    : ayy
+// Neptun : lmao
 // ---------------------------------------------------------------------------------------------
 // ezennel kijelentem, hogy a feladatot magam keszitettem, es ha barmilyen segitseget igenybe vettem vagy
 // mas szellemi termeket felhasznaltam, akkor a forrast es az atvett reszt kommentekben egyertelmuen jeloltem.
@@ -753,7 +753,7 @@ public:
         }
         if(hit.material->isRefractive) {
             vec4 refractionDir = (hit.material->refract(ray.dv,hit.normal)).normalize();
-            Ray refractedRay(hit.position - hit.normal*hibatures*sign(hit.normal.dot((ray.dv*(-1)).normalize())), refractionDir);
+            Ray refractedRay(hit.position - hit.normal*hibatures*sign(hit.normal.dot((ray.dv*-1).normalize())), refractionDir);
             outRadiance += Trace(refractedRay,depth+1)*(vec4(1,1,1,0)-hit.material->Fresnel((ray.dv).normalize(), hit.normal));
         }
         return outRadiance;
